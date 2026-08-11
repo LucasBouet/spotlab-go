@@ -1,0 +1,14 @@
+[Unit]
+Description=Spotlab (Go)
+After=network.target
+
+[Service]
+Type=simple
+User=spotlab
+WorkingDirectory=/srv/spotlab-go
+EnvironmentFile=/srv/spotlab-go/.env
+ExecStart=/srv/spotlab-go/bin/spotlabd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

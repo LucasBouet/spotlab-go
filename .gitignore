@@ -1,0 +1,10 @@
+/data/
+/cache/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.local
+/bin/
+activation_private.pem
