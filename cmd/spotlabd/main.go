@@ -19,7 +19,10 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/catalog"
 	"github.com/lucasbouet/spotlab-go/internal/config"
 	"github.com/lucasbouet/spotlab-go/internal/db"
+	dbgen "github.com/lucasbouet/spotlab-go/internal/db/gen"
+	"github.com/lucasbouet/spotlab-go/internal/library"
 	"github.com/lucasbouet/spotlab-go/internal/logging"
+	"github.com/lucasbouet/spotlab-go/internal/playlists"
 )
 
 func main() {
@@ -60,8 +63,12 @@ func main() {
 	})
 
 	catalog.Mount(router, requireAuth, catalog.NewDeezerClient(), catalog.NewLyricsClient())
+
+	queries := dbgen.New(conn)
+	library.Mount(router, requireAuth, queries)
+	playlists.Mount(router, requireAuth, queries)
 	// Les modules suivants montent leurs propres routes ici au fil des
-	// phases, ex. library.Mount(router, requireAuth, libraryDeps).
+	// phases, ex. devices.Mount(router, requireAuth, queries).
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
