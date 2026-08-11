@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lucasbouet/spotlab-go/internal/apihttp"
+	"github.com/lucasbouet/spotlab-go/internal/auth"
 	"github.com/lucasbouet/spotlab-go/internal/config"
 	"github.com/lucasbouet/spotlab-go/internal/db"
 	"github.com/lucasbouet/spotlab-go/internal/logging"
@@ -40,10 +41,24 @@ func main() {
 	}
 	defer conn.Close()
 
+	authService := auth.NewService(conn)
+	activator, err := auth.NewActivator(authService, cfg.ActivationPublicKeyPath)
+	if err != nil {
+		logger.Error("activation RSA", "error", err)
+		os.Exit(1)
+	}
+
 	router := apihttp.NewRouter(logger)
-	// Modules mount their own routes here as each phase lands, e.g.:
-	//   auth.Mount(router, authDeps)
-	//   catalog.Mount(router, catalogDeps)
+	auth.Mount(router, auth.Deps{
+		Service:   authService,
+		Activator: activator,
+		SiteName:  cfg.SiteName,
+		// Toujours fermé : l'activation par clé RSA est le seul point
+		// d'entrée pour de nouvelles personnes (docs/PLAN.md §5).
+		RegistrationEnabled: false,
+	})
+	// Les modules suivants montent leurs propres routes ici au fil des
+	// phases, ex. catalog.Mount(router, catalogDeps).
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
