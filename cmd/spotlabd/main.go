@@ -20,6 +20,7 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/config"
 	"github.com/lucasbouet/spotlab-go/internal/db"
 	dbgen "github.com/lucasbouet/spotlab-go/internal/db/gen"
+	"github.com/lucasbouet/spotlab-go/internal/devices"
 	"github.com/lucasbouet/spotlab-go/internal/library"
 	"github.com/lucasbouet/spotlab-go/internal/logging"
 	"github.com/lucasbouet/spotlab-go/internal/playlists"
@@ -67,8 +68,16 @@ func main() {
 	queries := dbgen.New(conn)
 	library.Mount(router, requireAuth, queries)
 	playlists.Mount(router, requireAuth, queries)
+
+	// Présence et diffusion appareils : sans objet tant que la phase 6
+	// (moteur de sync) n'existe pas — personne n'est jamais "en ligne" et
+	// aucun panneau n'a de flux SSE à rafraîchir. La phase 6 remplacera ces
+	// deux fermetures par le vrai Hub, sans toucher au reste de ce fichier.
+	alwaysOffline := func(userID, deviceID string) bool { return false }
+	noBroadcast := func(userID string) {}
+	devices.Mount(router, requireAuth, queries, alwaysOffline, noBroadcast)
 	// Les modules suivants montent leurs propres routes ici au fil des
-	// phases, ex. devices.Mount(router, requireAuth, queries).
+	// phases, ex. social.Mount(router, requireAuth, queries).
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
