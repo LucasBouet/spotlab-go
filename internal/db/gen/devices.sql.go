@@ -69,6 +69,25 @@ func (q *Queries) RenameDevice(ctx context.Context, arg RenameDeviceParams) (int
 	return result.RowsAffected()
 }
 
+type TouchDeviceLastSeenParams struct {
+	UserID   string
+	DeviceID string
+}
+
+// TouchDeviceLastSeen refreshes last_seen_at for an SSE connection's
+// device — a plain UPDATE, never a create. Matching zero rows (the device
+// isn't registered) is not an error here, exactly like the old server's
+// `prisma.device.update(...).catch(() => {})`: the caller is a
+// best-effort side note on every ping, not the source of truth for device
+// existence.
+func (q *Queries) TouchDeviceLastSeen(ctx context.Context, arg TouchDeviceLastSeenParams) error {
+	_, err := q.db.ExecContext(ctx,
+		"UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP WHERE user_id = ? AND device_id = ?",
+		arg.UserID, arg.DeviceID,
+	)
+	return err
+}
+
 type DeleteDeviceParams struct {
 	UserID   string
 	DeviceID string
@@ -83,4 +102,33 @@ func (q *Queries) DeleteDevice(ctx context.Context, arg DeleteDeviceParams) (int
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// CountOwnedDevices returns how many *distinct* deviceIDs belong to
+// userID. Deliberately not deduplicated on the caller's side first —
+// SET_ACTIVE_DEVICES compares this count against the raw request list
+// length, so a duplicate id in that list alone makes the counts disagree
+// and the whole command gets refused, matching the old server's
+// `owned.length !== action.deviceIds.length` exactly.
+func (q *Queries) CountOwnedDevices(ctx context.Context, userID string, deviceIDs []string) (int, error) {
+	if len(deviceIDs) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]byte, 0, len(deviceIDs)*2)
+	args := make([]any, 0, len(deviceIDs)+1)
+	args = append(args, userID)
+	for i, id := range deviceIDs {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		args = append(args, id)
+	}
+	row := q.db.QueryRowContext(ctx,
+		"SELECT COUNT(DISTINCT device_id) FROM devices WHERE user_id = ? AND device_id IN ("+string(placeholders)+")",
+		args...,
+	)
+	var count int
+	err := row.Scan(&count)
+	return count, err
 }

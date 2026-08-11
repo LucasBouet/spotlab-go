@@ -40,6 +40,21 @@ func (s *statusRecorder) WriteHeader(status int) {
 	s.ResponseWriter.WriteHeader(status)
 }
 
+// Flush makes statusRecorder itself satisfy http.Flusher, delegating to
+// the real ResponseWriter's. Embedding http.ResponseWriter only promotes
+// the methods *that interface* declares (Header/Write/WriteHeader) — not
+// Flush, which belongs to the separate http.Flusher interface — so
+// without this, any handler behind this middleware that type-asserts for
+// a flusher (every SSE stream) fails that assertion even though the real
+// underlying writer supports it perfectly well. Reproduced live: the sync
+// SSE handler answered "streaming non supporté" the moment Logging sat in
+// front of it.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Logging logs one structured line per request: method, path, status,
 // duration, and the request id RequestID stamped earlier.
 func Logging(logger *slog.Logger) func(http.Handler) http.Handler {

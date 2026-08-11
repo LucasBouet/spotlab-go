@@ -25,6 +25,7 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/logging"
 	"github.com/lucasbouet/spotlab-go/internal/playlists"
 	"github.com/lucasbouet/spotlab-go/internal/social"
+	"github.com/lucasbouet/spotlab-go/internal/sync"
 )
 
 func main() {
@@ -70,18 +71,38 @@ func main() {
 	library.Mount(router, requireAuth, queries)
 	playlists.Mount(router, requireAuth, queries)
 
-	// Présence et diffusion appareils : sans objet tant que la phase 6
-	// (moteur de sync) n'existe pas — personne n'est jamais "en ligne" et
-	// aucun panneau n'a de flux SSE à rafraîchir. La phase 6 remplacera ces
-	// deux fermetures par le vrai Hub, sans toucher au reste de ce fichier.
-	alwaysOffline := func(userID, deviceID string) bool { return false }
-	noBroadcast := func(userID string) {}
-	devices.Mount(router, requireAuth, queries, alwaysOffline, noBroadcast)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	noActivity := func(userID string) social.FriendActivityDTO { return social.FriendActivityDTO{} }
-	social.Mount(router, requireAuth, queries, noActivity)
-	// Les modules suivants montent leurs propres routes ici au fil des
-	// phases, ex. sync.Mount(router, requireAuth, hub).
+	// Le Hub possède tout l'état de lecture/jam en mémoire — une seule
+	// goroutine, tout le reste (appareils, amis) lui délègue présence et
+	// diffusion par fermetures plutôt que par dépendance directe, pour
+	// suivre la même séparation que le paquet sync lui-même impose entre
+	// l'acteur et l'E/S DB (docs/PLAN.md §3.1).
+	hub := sync.NewHub(logger)
+	go hub.Run(ctx)
+
+	isOnline := func(userID, deviceID string) bool { return hub.IsOnline(context.Background(), userID, deviceID) }
+	broadcastDevices := func(userID string) {
+		rows, err := queries.ListDevicesByUser(context.Background(), userID)
+		if err != nil {
+			return
+		}
+		hub.BroadcastDevices(context.Background(), userID, sync.DeviceDTOsFromRows(rows))
+	}
+	devices.Mount(router, requireAuth, queries, isOnline, broadcastDevices)
+
+	activity := func(userID string) social.FriendActivityDTO {
+		a := hub.Activity(context.Background(), userID)
+		dto := social.FriendActivityDTO{Online: a.Online, IsPlaying: a.IsPlaying}
+		if a.Track != nil {
+			dto.Track = &social.FriendTrackDTO{Title: a.Track.Title, Artist: a.Track.Artist, Cover: a.Track.Cover}
+		}
+		return dto
+	}
+	social.Mount(router, requireAuth, queries, activity)
+
+	sync.Mount(router, requireAuth, hub, queries)
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -96,8 +117,6 @@ func main() {
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 
 	logger.Info("arrêt en cours")
