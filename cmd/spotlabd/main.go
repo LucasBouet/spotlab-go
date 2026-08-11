@@ -24,6 +24,7 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/library"
 	"github.com/lucasbouet/spotlab-go/internal/logging"
 	"github.com/lucasbouet/spotlab-go/internal/playlists"
+	"github.com/lucasbouet/spotlab-go/internal/social"
 )
 
 func main() {
@@ -76,8 +77,11 @@ func main() {
 	alwaysOffline := func(userID, deviceID string) bool { return false }
 	noBroadcast := func(userID string) {}
 	devices.Mount(router, requireAuth, queries, alwaysOffline, noBroadcast)
+
+	noActivity := func(userID string) social.FriendActivityDTO { return social.FriendActivityDTO{} }
+	social.Mount(router, requireAuth, queries, noActivity)
 	// Les modules suivants montent leurs propres routes ici au fil des
-	// phases, ex. social.Mount(router, requireAuth, queries).
+	// phases, ex. sync.Mount(router, requireAuth, hub).
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
