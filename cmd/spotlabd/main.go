@@ -16,6 +16,7 @@ import (
 
 	"github.com/lucasbouet/spotlab-go/internal/apihttp"
 	"github.com/lucasbouet/spotlab-go/internal/auth"
+	"github.com/lucasbouet/spotlab-go/internal/catalog"
 	"github.com/lucasbouet/spotlab-go/internal/config"
 	"github.com/lucasbouet/spotlab-go/internal/db"
 	"github.com/lucasbouet/spotlab-go/internal/logging"
@@ -49,7 +50,7 @@ func main() {
 	}
 
 	router := apihttp.NewRouter(logger)
-	auth.Mount(router, auth.Deps{
+	requireAuth := auth.Mount(router, auth.Deps{
 		Service:   authService,
 		Activator: activator,
 		SiteName:  cfg.SiteName,
@@ -57,8 +58,10 @@ func main() {
 		// d'entrée pour de nouvelles personnes (docs/PLAN.md §5).
 		RegistrationEnabled: false,
 	})
+
+	catalog.Mount(router, requireAuth, catalog.NewDeezerClient(), catalog.NewLyricsClient())
 	// Les modules suivants montent leurs propres routes ici au fil des
-	// phases, ex. catalog.Mount(router, catalogDeps).
+	// phases, ex. library.Mount(router, requireAuth, libraryDeps).
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
