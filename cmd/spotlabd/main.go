@@ -26,6 +26,7 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/playlists"
 	"github.com/lucasbouet/spotlab-go/internal/social"
 	"github.com/lucasbouet/spotlab-go/internal/stats"
+	"github.com/lucasbouet/spotlab-go/internal/stream"
 	"github.com/lucasbouet/spotlab-go/internal/sync"
 )
 
@@ -106,6 +107,11 @@ func main() {
 	social.Mount(router, requireAuth, queries, activity)
 
 	sync.Mount(router, requireAuth, hub, queries)
+
+	// The audio pipeline's downloads run on the server's own lifetime
+	// context, not any single request's — see manager.go's doc comment.
+	streamManager := stream.NewManager(ctx, cfg.StreamCacheDir, cfg.YTDLPPath, deezerClient)
+	stream.Mount(router, requireAuth, streamManager)
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
