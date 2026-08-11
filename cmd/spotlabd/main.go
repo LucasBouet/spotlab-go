@@ -25,6 +25,7 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/logging"
 	"github.com/lucasbouet/spotlab-go/internal/playlists"
 	"github.com/lucasbouet/spotlab-go/internal/social"
+	"github.com/lucasbouet/spotlab-go/internal/stats"
 	"github.com/lucasbouet/spotlab-go/internal/sync"
 )
 
@@ -65,11 +66,13 @@ func main() {
 		RegistrationEnabled: false,
 	})
 
-	catalog.Mount(router, requireAuth, catalog.NewDeezerClient(), catalog.NewLyricsClient())
+	deezerClient := catalog.NewDeezerClient()
+	catalog.Mount(router, requireAuth, deezerClient, catalog.NewLyricsClient())
 
 	queries := dbgen.New(conn)
 	library.Mount(router, requireAuth, queries)
 	playlists.Mount(router, requireAuth, queries)
+	stats.Mount(router, requireAuth, queries, deezerClient, cfg.LastFMAPIKey)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

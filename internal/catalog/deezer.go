@@ -40,6 +40,13 @@ func NewDeezerClient() *DeezerClient {
 	return &DeezerClient{http: &http.Client{Timeout: 15 * time.Second}, baseURL: deezerAPIBase}
 }
 
+// NewDeezerClientForTesting points a client at an arbitrary base URL (an
+// httptest server) — for tests in *other* packages (internal/stats) that
+// need to stub Deezer over HTTP without exposing DeezerClient's fields.
+func NewDeezerClientForTesting(httpClient *http.Client, baseURL string) *DeezerClient {
+	return &DeezerClient{http: httpClient, baseURL: baseURL}
+}
+
 type errorProbe struct {
 	Error json.RawMessage `json:"error"`
 }
@@ -127,4 +134,26 @@ func (c *DeezerClient) FetchArtistPage(ctx context.Context, id string) (artist j
 		topTracks = json.RawMessage("[]")
 	}
 	return artist, topTracks, true
+}
+
+// FetchArtistRelated, FetchArtistTopTracks, FetchArtistAlbums and
+// FetchChart back internal/stats' recommendation build (Phase 7) — unlike
+// the rest of this file they're consumed by narrow typed decodes there,
+// not passthrough, matching recommendations.ts's own RecTrack/RecAlbum
+// normalization rather than the wide-open shape the rest of the catalog
+// forwards to Android.
+func (c *DeezerClient) FetchArtistRelated(ctx context.Context, artistID string, limit int) (json.RawMessage, bool) {
+	return c.fetchDataArray(ctx, "/artist/"+artistID+"/related?limit="+strconv.Itoa(limit))
+}
+
+func (c *DeezerClient) FetchArtistTopTracks(ctx context.Context, artistID string, limit int) (json.RawMessage, bool) {
+	return c.fetchDataArray(ctx, "/artist/"+artistID+"/top?limit="+strconv.Itoa(limit))
+}
+
+func (c *DeezerClient) FetchArtistAlbums(ctx context.Context, artistID string, limit int) (json.RawMessage, bool) {
+	return c.fetchDataArray(ctx, "/artist/"+artistID+"/albums?limit="+strconv.Itoa(limit))
+}
+
+func (c *DeezerClient) FetchChart(ctx context.Context, limit int) (json.RawMessage, bool) {
+	return c.fetch(ctx, "/chart?limit="+strconv.Itoa(limit))
 }
