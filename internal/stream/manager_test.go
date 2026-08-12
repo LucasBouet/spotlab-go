@@ -49,7 +49,7 @@ func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	fake := newFakeSearchAndDownloadYtDlp(t)
 	deezer := newTestDeezerTrackServer(t)
-	return NewManager(context.Background(), t.TempDir(), fake, deezer)
+	return NewManager(context.Background(), t.TempDir(), fake, "", deezer)
 }
 
 // newFakeBlockingDownloadYtDlp writes "hello " immediately after the
@@ -85,7 +85,7 @@ func TestOpenStreamOnColdCacheStreamsThenSecondCallServesFromCache(t *testing.T)
 	marker := filepath.Join(destDir, "go-signal")
 	fake := newFakeBlockingDownloadYtDlp(t, marker)
 	deezer := newTestDeezerTrackServer(t)
-	m := NewManager(context.Background(), destDir, fake, deezer)
+	m := NewManager(context.Background(), destDir, fake, "", deezer)
 
 	result, err := m.OpenStream("123")
 	if err != nil {
@@ -170,7 +170,7 @@ esac
 	}))
 	defer server.Close()
 	deezer := catalog.NewDeezerClientForTesting(server.Client(), server.URL)
-	m := NewManager(context.Background(), t.TempDir(), fake, deezer)
+	m := NewManager(context.Background(), t.TempDir(), fake, "", deezer)
 
 	const n = 10
 	var wg sync.WaitGroup

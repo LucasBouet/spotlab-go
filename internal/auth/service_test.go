@@ -22,8 +22,30 @@ func TestRegisterAccountSucceeds(t *testing.T) {
 	if !user.Name.Valid || user.Name.String != "Marie" {
 		t.Errorf("name = %+v, attendu Marie", user.Name)
 	}
-	if user.Role != "USER" {
-		t.Errorf("role = %q, attendu USER", user.Role)
+	// The first account in an empty database is auto-promoted to ADMIN —
+	// see TestFirstUserBecomesAdminSubsequentUsersDoNot for the full
+	// bootstrap-rule coverage.
+	if user.Role != "ADMIN" {
+		t.Errorf("role = %q, attendu ADMIN (premier compte de la base)", user.Role)
+	}
+}
+
+func TestFirstUserBecomesAdminSubsequentUsersDoNot(t *testing.T) {
+	svc := newTestDB(t)
+	first, err := svc.RegisterAccount(context.Background(), "first@example.com", "First", "correcthorse")
+	if err != nil {
+		t.Fatalf("RegisterAccount (first): %v", err)
+	}
+	if first.Role != "ADMIN" {
+		t.Errorf("role du premier compte = %q, attendu ADMIN", first.Role)
+	}
+
+	second, err := svc.RegisterAccount(context.Background(), "second@example.com", "Second", "correcthorse")
+	if err != nil {
+		t.Fatalf("RegisterAccount (second): %v", err)
+	}
+	if second.Role != "USER" {
+		t.Errorf("role du deuxième compte = %q, attendu USER", second.Role)
 	}
 }
 
@@ -208,6 +230,45 @@ func TestRefreshIsAtomicAndHasNoGracePeriod(t *testing.T) {
 	}
 	if _, _, err := svc.ValidateToken(ctx, newSession.ID); err != nil {
 		t.Errorf("nouveau jeton devrait être valide: %v", err)
+	}
+}
+
+func TestSiteNameFallsBackWhenUnset(t *testing.T) {
+	svc := newTestDB(t)
+	if got := svc.SiteName(context.Background(), "Fallback"); got != "Fallback" {
+		t.Errorf("SiteName = %q, attendu le repli Fallback", got)
+	}
+}
+
+func TestSiteNameReflectsAdminOverride(t *testing.T) {
+	svc := newTestDB(t)
+	ctx := context.Background()
+	if err := svc.queries.SetAppSetting(ctx, db.SetAppSettingParams{Key: "site_name", Value: "Ma Radio"}); err != nil {
+		t.Fatalf("SetAppSetting: %v", err)
+	}
+	if got := svc.SiteName(ctx, "Fallback"); got != "Ma Radio" {
+		t.Errorf("SiteName = %q, attendu Ma Radio", got)
+	}
+}
+
+func TestRegistrationEnabledFallsBackWhenUnset(t *testing.T) {
+	svc := newTestDB(t)
+	if got := svc.RegistrationEnabled(context.Background(), false); got {
+		t.Error("RegistrationEnabled devrait retomber sur le repli (false) tant que rien n'est en base")
+	}
+	if got := svc.RegistrationEnabled(context.Background(), true); !got {
+		t.Error("RegistrationEnabled devrait retomber sur le repli (true) tant que rien n'est en base")
+	}
+}
+
+func TestRegistrationEnabledReflectsAdminOverride(t *testing.T) {
+	svc := newTestDB(t)
+	ctx := context.Background()
+	if err := svc.queries.SetAppSetting(ctx, db.SetAppSettingParams{Key: "registration_enabled", Value: "true"}); err != nil {
+		t.Fatalf("SetAppSetting: %v", err)
+	}
+	if got := svc.RegistrationEnabled(ctx, false); !got {
+		t.Error("RegistrationEnabled devrait refléter la valeur true écrite en base, malgré un repli à false")
 	}
 }
 

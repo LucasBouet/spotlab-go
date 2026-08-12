@@ -58,8 +58,14 @@ type MeResponseDTO struct {
 }
 
 // ServerConfigDTO is GET /api/config's body, the only unauthenticated route
-// besides /api/activate.
+// besides /api/activate. ActivationEnabled is always true (POST /api/activate
+// is unconditionally mounted, see docs/PLAN.md §5) — reported explicitly
+// rather than assumed so a client can tell "signup is closed" (both false)
+// apart from "signup needs an activation code" (RegistrationEnabled false,
+// ActivationEnabled true) instead of just hiding account creation entirely
+// whenever RegistrationEnabled is false.
 type ServerConfigDTO struct {
 	SiteName            string `json:"siteName"`
 	RegistrationEnabled bool   `json:"registrationEnabled"`
+	ActivationEnabled   bool   `json:"activationEnabled"`
 }

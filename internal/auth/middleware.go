@@ -32,6 +32,15 @@ func SessionFromContext(ctx context.Context) db.Session {
 	return authFromContext(ctx).session
 }
 
+// ContextWithUserForTesting attaches user the same way RequireAuth would,
+// so other packages' tests can exercise a handler that reads
+// UserFromContext/SessionFromContext without standing up a full HTTP
+// request + real session — mirrors catalog.NewDeezerClientForTesting's
+// precedent for test-only exports.
+func ContextWithUserForTesting(ctx context.Context, user db.User) context.Context {
+	return context.WithValue(ctx, authContextKey, authContext{user: user})
+}
+
 func authFromContext(ctx context.Context) authContext {
 	auth, ok := ctx.Value(authContextKey).(authContext)
 	if !ok {

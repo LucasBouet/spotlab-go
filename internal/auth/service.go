@@ -40,6 +40,38 @@ func NewService(sqlDB *sql.DB) *Service {
 	return &Service{sqlDB: sqlDB, queries: db.New(sqlDB)}
 }
 
+// appSettingsSiteNameKey and appSettingsRegistrationKey match the old
+// server's AppSettingKey values exactly (config/settings.ts) — an admin
+// panel that reused the same keys wouldn't need any data migration.
+const (
+	appSettingsSiteNameKey     = "site_name"
+	appSettingsRegistrationKey = "registration_enabled"
+)
+
+// SiteName resolves the admin-configurable site name, falling back to
+// fallback (the startup config value) when nothing has been set in
+// app_settings yet — the table exists from Phase 1 but nothing wrote to it
+// until the admin panel did.
+func (s *Service) SiteName(ctx context.Context, fallback string) string {
+	value, err := s.queries.GetAppSetting(ctx, appSettingsSiteNameKey)
+	if err != nil || value == "" {
+		return fallback
+	}
+	return value
+}
+
+// RegistrationEnabled resolves the admin-configurable open-registration
+// toggle. Unset (the common case — see docs/PLAN.md §5, closed by design)
+// falls back to fallback rather than defaulting to open, so a server that
+// never touches the admin panel behaves exactly as before this existed.
+func (s *Service) RegistrationEnabled(ctx context.Context, fallback bool) bool {
+	value, err := s.queries.GetAppSetting(ctx, appSettingsRegistrationKey)
+	if err != nil {
+		return fallback
+	}
+	return value == "true"
+}
+
 // RegisterAccount creates a new user with a freshly hashed password. Shared
 // by /api/auth/register (gated by registration being closed, see handlers.go)
 // and /api/activate (bypasses that gate — a valid signature is itself the
@@ -78,12 +110,23 @@ func registerAccountWith(ctx context.Context, q *db.Queries, email, name, passwo
 		nameValue = sql.NullString{String: trimmed, Valid: true}
 	}
 
+	// The old server had no bootstrap rule at all — the first admin was set
+	// by hand in the database. On a fresh self-hosted install that's an
+	// unnecessary rough edge: whoever activates first (in practice, the
+	// person who deployed the server) becomes ADMIN automatically, and
+	// every account after that is a plain USER promoted through the admin
+	// panel this unblocks in the first place.
+	role := "USER"
+	if count, err := q.CountUsers(ctx); err == nil && count == 0 {
+		role = "ADMIN"
+	}
+
 	return q.CreateUser(ctx, db.CreateUserParams{
 		ID:           idgen.New(),
 		Email:        email,
 		Name:         nameValue,
 		PasswordHash: hash,
-		Role:         "USER",
+		Role:         role,
 	})
 }
 

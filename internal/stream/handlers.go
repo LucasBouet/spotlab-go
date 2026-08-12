@@ -3,6 +3,7 @@ package stream
 import (
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 
 	"github.com/go-chi/chi/v5"
@@ -11,13 +12,13 @@ import (
 
 var trackIDPattern = regexp.MustCompile(`^\d+$`)
 
-// Mount registers the audio routes, all behind requireAuth. GET/download-
-// to-MP3 and the admin/import surface stay out of v1 (docs/PLAN.md §8).
+// Mount registers the audio routes, all behind requireAuth.
 func Mount(r chi.Router, requireAuth func(http.Handler) http.Handler, manager *Manager) {
 	r.Group(func(r chi.Router) {
 		r.Use(requireAuth)
 		r.Get("/api/stream/{id}", handleStream(manager))
 		r.Post("/api/prefetch/{id}", handlePrefetch(manager))
+		r.Get("/api/download/{id}", handleDownload(manager))
 	})
 }
 
@@ -111,6 +112,73 @@ func handlePrefetch(manager *Manager) http.HandlerFunc {
 			return
 		}
 		apihttp.JSON(w, http.StatusOK, map[string]bool{"success": true})
+	}
+}
+
+// handleDownload is GET /api/download/{id} — "save to device": the same
+// cached container yt-dlp gave us (webm/m4a/whatever), transcoded to MP3
+// 192k on the fly for maximum player compatibility. Mirrors
+// src/app/api/download/[id]/route.ts. Unlike the yt-dlp pipeline, this
+// transcode has exactly one consumer (this response), so it's fine — and
+// correct — to tie the ffmpeg process to r.Context(): a client that
+// disconnects should kill it, not leave it running for nobody.
+func handleDownload(manager *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if !trackIDPattern.MatchString(id) {
+			apihttp.Error(w, http.StatusBadRequest, "Identifiant invalide.")
+			return
+		}
+
+		filePath, err := manager.ResolveFile(id)
+		if err != nil {
+			apihttp.Error(w, http.StatusBadGateway, streamErrorMessage(err))
+			return
+		}
+
+		ffmpegPath := manager.ffmpegPath
+		if ffmpegPath == "" {
+			ffmpegPath = "ffmpeg"
+		}
+		cmd := exec.CommandContext(r.Context(), ffmpegPath,
+			"-i", filePath,
+			"-vn",
+			"-acodec", "libmp3lame",
+			"-b:a", "192k",
+			"-f", "mp3",
+			"pipe:1",
+		)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			apihttp.Error(w, http.StatusInternalServerError, "Erreur serveur.")
+			return
+		}
+		if err := cmd.Start(); err != nil {
+			apihttp.Error(w, http.StatusBadGateway, "Le transcodage du titre a échoué.")
+			return
+		}
+
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, _ := w.(http.Flusher)
+		buf := make([]byte, 64*1024)
+		for {
+			n, readErr := stdout.Read(buf)
+			if n > 0 {
+				if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+					break // client disconnected — r.Context() cancellation stops ffmpeg below
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		_ = cmd.Wait()
 	}
 }
 

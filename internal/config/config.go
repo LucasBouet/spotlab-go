@@ -17,6 +17,9 @@ type Config struct {
 	LastFMAPIKey string
 	// YTDLPPath is the yt-dlp binary. Empty means "look up PATH".
 	YTDLPPath string
+	// FFmpegPath is the ffmpeg binary, used only for GET /api/download's
+	// on-the-fly MP3 transcode. Empty means "look up PATH".
+	FFmpegPath string
 	// ActivationPublicKeyPath overrides the embedded RSA public key, for
 	// rotating it without a rebuild. Empty uses the embedded key.
 	ActivationPublicKeyPath string
@@ -33,6 +36,7 @@ func Load() Config {
 		StreamCacheDir:          getEnv("STREAM_CACHE_DIR", "./cache/songs"),
 		LastFMAPIKey:            os.Getenv("LASTFM_API_KEY"),
 		YTDLPPath:               getEnv("YTDLP_PATH", "yt-dlp"),
+		FFmpegPath:              getEnv("FFMPEG_PATH", "ffmpeg"),
 		ActivationPublicKeyPath: os.Getenv("ACTIVATION_PUBLIC_KEY_PATH"),
 		LogLevel:                getEnv("LOG_LEVEL", "info"),
 		SiteName:                getEnv("SITE_NAME", "Spotlab"),

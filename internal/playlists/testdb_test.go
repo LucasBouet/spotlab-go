@@ -2,6 +2,7 @@ package playlists
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -33,4 +34,27 @@ func newTestQueries(t *testing.T) (*dbgen.Queries, string) {
 		t.Fatalf("création de l'utilisateur de test: %v", err)
 	}
 	return queries, user.ID
+}
+
+// newTestDB is newTestQueries but also returns the raw *sql.DB — the
+// import feature needs it directly for transactions (see import.go).
+func newTestDB(t *testing.T) (*sql.DB, *dbgen.Queries, string) {
+	t.Helper()
+	silenceGooseOnce.Do(func() { goose.SetLogger(goose.NopLogger()) })
+
+	path := filepath.Join(t.TempDir(), "test.db")
+	conn, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("ouverture de la base de test: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	queries := dbgen.New(conn)
+	user, err := queries.CreateUser(context.Background(), dbgen.CreateUserParams{
+		ID: idgen.New(), Email: "test@example.com", PasswordHash: "x", Role: "USER",
+	})
+	if err != nil {
+		t.Fatalf("création de l'utilisateur de test: %v", err)
+	}
+	return conn, queries, user.ID
 }

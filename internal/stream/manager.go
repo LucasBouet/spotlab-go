@@ -16,9 +16,10 @@ import (
 // functions in stream.ts, bundled into one value so it can be constructed
 // once in main() and handed to the HTTP layer.
 type Manager struct {
-	cacheDir  string
-	ytdlpPath string
-	deezer    *catalog.DeezerClient
+	cacheDir   string
+	ytdlpPath  string
+	ffmpegPath string
+	deezer     *catalog.DeezerClient
 
 	// ctx is the server's lifetime context — deliberately NOT any single
 	// request's context. A download must outlive the request that started
@@ -31,9 +32,9 @@ type Manager struct {
 	inFlight map[string]*Download
 }
 
-func NewManager(ctx context.Context, cacheDir, ytdlpPath string, deezer *catalog.DeezerClient) *Manager {
+func NewManager(ctx context.Context, cacheDir, ytdlpPath, ffmpegPath string, deezer *catalog.DeezerClient) *Manager {
 	return &Manager{
-		ctx: ctx, cacheDir: cacheDir, ytdlpPath: ytdlpPath, deezer: deezer,
+		ctx: ctx, cacheDir: cacheDir, ytdlpPath: ytdlpPath, ffmpegPath: ffmpegPath, deezer: deezer,
 		inFlight: make(map[string]*Download),
 	}
 }

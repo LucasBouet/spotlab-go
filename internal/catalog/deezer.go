@@ -57,7 +57,14 @@ type errorProbe struct {
 // — collapsing exactly the same three failure modes the old server's
 // fetchDeezerUrl collapses into a single null.
 func (c *DeezerClient) fetch(ctx context.Context, path string) (json.RawMessage, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	return c.FetchURL(ctx, c.baseURL+path)
+}
+
+// FetchURL is fetch, but for an already-absolute URL — needed to follow a
+// paginated response's own `next` cursor (playlist track pages), which
+// Deezer hands back as a full URL rather than a path to re-prefix.
+func (c *DeezerClient) FetchURL(ctx context.Context, url string) (json.RawMessage, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false
 	}
@@ -156,4 +163,18 @@ func (c *DeezerClient) FetchArtistAlbums(ctx context.Context, artistID string, l
 
 func (c *DeezerClient) FetchChart(ctx context.Context, limit int) (json.RawMessage, bool) {
 	return c.fetch(ctx, "/chart?limit="+strconv.Itoa(limit))
+}
+
+// FetchPlaylist and FetchPlaylistTracksPage back internal/playlists' Deezer
+// playlist import — narrow typed decodes there, like the recommendations
+// build above, not passthrough. The `tracks` field embedded on
+// /playlist/{id} is capped at 400 items by Deezer with no `next` cursor
+// once truncated; FetchPlaylistTracksPage (the dedicated /tracks
+// collection endpoint) paginates through the full playlist instead.
+func (c *DeezerClient) FetchPlaylist(ctx context.Context, id string) (json.RawMessage, bool) {
+	return c.fetch(ctx, "/playlist/"+id)
+}
+
+func (c *DeezerClient) FetchPlaylistTracksPage(ctx context.Context, id string, limit int) (json.RawMessage, bool) {
+	return c.fetch(ctx, "/playlist/"+id+"/tracks?limit="+strconv.Itoa(limit)+"&index=0")
 }

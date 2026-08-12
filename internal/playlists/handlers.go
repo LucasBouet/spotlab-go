@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/lucasbouet/spotlab-go/internal/apihttp"
 	"github.com/lucasbouet/spotlab-go/internal/auth"
+	"github.com/lucasbouet/spotlab-go/internal/catalog"
 	db "github.com/lucasbouet/spotlab-go/internal/db/gen"
 	"github.com/lucasbouet/spotlab-go/internal/idgen"
 )
@@ -30,13 +31,17 @@ func parsePositiveTrackID(raw string) (int64, bool) {
 	return id, true
 }
 
-// Mount registers every playlist route, all behind requireAuth.
-func Mount(r chi.Router, requireAuth func(http.Handler) http.Handler, queries *db.Queries) {
+// Mount registers every playlist route, all behind requireAuth. sqlDB and
+// deezer are only needed for the Deezer playlist import — every other
+// route only ever touches queries.
+func Mount(r chi.Router, requireAuth func(http.Handler) http.Handler, sqlDB *sql.DB, queries *db.Queries, deezer *catalog.DeezerClient) {
+	importClient := newImportHTTPClient()
 	r.Group(func(r chi.Router) {
 		r.Use(requireAuth)
 		r.Get("/api/playlists", handleList(queries))
 		r.Post("/api/playlists", handleCreate(queries))
 		r.Get("/api/playlists/membership", handleMembership(queries))
+		r.Post("/api/playlists/import", handleImport(sqlDB, queries, deezer, importClient))
 		r.Get("/api/playlists/{id}", handleDetail(queries))
 		r.Patch("/api/playlists/{id}", handleRename(queries))
 		r.Delete("/api/playlists/{id}", handleDelete(queries))

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lucasbouet/spotlab-go/internal/admin"
 	"github.com/lucasbouet/spotlab-go/internal/apihttp"
 	"github.com/lucasbouet/spotlab-go/internal/auth"
 	"github.com/lucasbouet/spotlab-go/internal/catalog"
@@ -72,8 +73,9 @@ func main() {
 
 	queries := dbgen.New(conn)
 	library.Mount(router, requireAuth, queries)
-	playlists.Mount(router, requireAuth, queries)
+	playlists.Mount(router, requireAuth, conn, queries, deezerClient)
 	stats.Mount(router, requireAuth, queries, deezerClient, cfg.LastFMAPIKey)
+	admin.Mount(router, requireAuth, queries)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -110,7 +112,7 @@ func main() {
 
 	// The audio pipeline's downloads run on the server's own lifetime
 	// context, not any single request's — see manager.go's doc comment.
-	streamManager := stream.NewManager(ctx, cfg.StreamCacheDir, cfg.YTDLPPath, deezerClient)
+	streamManager := stream.NewManager(ctx, cfg.StreamCacheDir, cfg.YTDLPPath, cfg.FFmpegPath, deezerClient)
 	stream.Mount(router, requireAuth, streamManager)
 
 	server := &http.Server{

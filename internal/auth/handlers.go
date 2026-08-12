@@ -10,12 +10,14 @@ import (
 )
 
 // Deps is everything the auth routes need beyond the Service and Activator
-// they're built from.
+// they're built from. SiteName and RegistrationEnabled are the *fallback*
+// values used until an admin overrides them via the admin panel (see
+// Service.SiteName/RegistrationEnabled) — not fixed values anymore.
 type Deps struct {
 	Service             *Service
 	Activator           *Activator
 	SiteName            string
-	RegistrationEnabled bool // always false in practice — see docs/PLAN.md §5
+	RegistrationEnabled bool // fallback only; false by design — see docs/PLAN.md §5
 }
 
 // Mount registers every auth + config + activation route, and returns the
@@ -42,8 +44,9 @@ func Mount(r chi.Router, deps Deps) func(http.Handler) http.Handler {
 func handleConfig(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		apihttp.JSON(w, http.StatusOK, ServerConfigDTO{
-			SiteName:            deps.SiteName,
-			RegistrationEnabled: deps.RegistrationEnabled,
+			SiteName:            deps.Service.SiteName(r.Context(), deps.SiteName),
+			RegistrationEnabled: deps.Service.RegistrationEnabled(r.Context(), deps.RegistrationEnabled),
+			ActivationEnabled:   true,
 		})
 	}
 }
@@ -87,7 +90,7 @@ type registerBody struct {
 
 func handleRegister(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !deps.RegistrationEnabled {
+		if !deps.Service.RegistrationEnabled(r.Context(), deps.RegistrationEnabled) {
 			apihttp.Error(w, http.StatusForbidden,
 				"Inscription fermée. Utilisez un code d'activation.")
 			return
@@ -120,7 +123,7 @@ func handleMe(deps Deps) http.HandlerFunc {
 		session := SessionFromContext(r.Context())
 		apihttp.JSON(w, http.StatusOK, MeResponseDTO{
 			User:      userDTO(user),
-			SiteName:  deps.SiteName,
+			SiteName:  deps.Service.SiteName(r.Context(), deps.SiteName),
 			ExpiresAt: session.ExpiresAt.Format(time.RFC3339),
 		})
 	}
