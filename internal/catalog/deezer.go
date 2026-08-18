@@ -161,6 +161,15 @@ func (c *DeezerClient) FetchArtistAlbums(ctx context.Context, artistID string, l
 	return c.fetchDataArray(ctx, "/artist/"+artistID+"/albums?limit="+strconv.Itoa(limit))
 }
 
+// FetchArtistRadio is Deezer's own "radio" mix seeded from one artist — a
+// ready-made blend of that artist and similar-sounding ones, not just their
+// own catalogue (that's FetchArtistTopTracks). Backs the "<Artist> Radio"
+// smart playlist (internal/stats/smartplaylists.go); same {"data": [...]}
+// envelope as the other artist list endpoints above.
+func (c *DeezerClient) FetchArtistRadio(ctx context.Context, artistID string, limit int) (json.RawMessage, bool) {
+	return c.fetchDataArray(ctx, "/artist/"+artistID+"/radio?limit="+strconv.Itoa(limit))
+}
+
 func (c *DeezerClient) FetchChart(ctx context.Context, limit int) (json.RawMessage, bool) {
 	return c.fetch(ctx, "/chart?limit="+strconv.Itoa(limit))
 }

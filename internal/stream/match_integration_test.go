@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newFakeExecutable writes script as an executable shell script and
@@ -79,5 +80,34 @@ func TestFindBestMatchSurfacesStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "video unavailable") {
 		t.Errorf("err = %q, attendu qu'il contienne le stderr de yt-dlp", err.Error())
+	}
+}
+
+// TestFindBestMatchTimesOutOnHangingSearch guards the regression this fix
+// closes: a yt-dlp search that never exits (YouTube-side stall, throttling)
+// used to hang the caller — and therefore GET /api/stream/{id} for any
+// uncached track — forever, since only the download step had a timeout.
+// searchTimeout must actually bound the search half too.
+func TestFindBestMatchTimesOutOnHangingSearch(t *testing.T) {
+	previous := searchTimeout
+	searchTimeout = 200 * time.Millisecond
+	defer func() { searchTimeout = previous }()
+
+	// exec, not a plain `sleep 30`: a plain command would fork sleep as a
+	// child of this script's shell, and killing only the shell (what
+	// exec.CommandContext does on timeout) leaves that orphaned child
+	// holding the stdout pipe open — the very os/exec pipe-inheritance
+	// gotcha this test would otherwise fall into, and unrelated to the
+	// behavior under test. exec replaces the shell with sleep in place (same
+	// pid), so the timeout's kill actually stops it.
+	fake := newFakeExecutable(t, `exec sleep 30`)
+	start := time.Now()
+	_, err := FindBestMatch(context.Background(), fake, MatchQuery{Title: "X", Artist: "Y", DurationSeconds: 100})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("attendu une erreur quand yt-dlp ne répond jamais")
+	}
+	if elapsed >= 5*time.Second {
+		t.Errorf("FindBestMatch a attendu %v, attendu un abandon peu après searchTimeout (200ms)", elapsed)
 	}
 }

@@ -7,6 +7,8 @@ package stats
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +29,8 @@ func Mount(r chi.Router, requireAuth func(http.Handler) http.Handler, queries *d
 		r.Post("/api/plays", handlePostPlay(queries, deezer, lastfm))
 		r.Get("/api/stats", handleGetStats(queries))
 		r.Get("/api/recommendations", handleGetRecommendations(queries, deezer))
+		r.Get("/api/smart-playlists", handleGetSmartPlaylists(queries, deezer))
+		r.Get("/api/smart-playlists/artist/{artistId}", handleGetArtistPlaylists(deezer))
 	})
 }
 
@@ -79,6 +83,7 @@ func handlePostPlay(queries *db.Queries, deezer *catalog.DeezerClient, lastfm *l
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			ensureTrackGenre(ctx, queries, deezer, lastfm, body.DeezerTrackID, body.ArtistName)
+			ensureTrackReleaseYear(ctx, queries, deezer, body.DeezerTrackID)
 		}()
 
 		apihttp.JSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -154,5 +159,52 @@ func handleGetRecommendations(queries *db.Queries, deezer *catalog.DeezerClient)
 			return
 		}
 		apihttp.JSON(w, http.StatusOK, result)
+	}
+}
+
+// handleGetSmartPlaylists is GET /api/smart-playlists (add &refresh=1 to
+// bypass the 24h cache) — the "100% <Artist>", "<Artist> Radio", genre and
+// decade playlists shown on the home screen.
+func handleGetSmartPlaylists(queries *db.Queries, deezer *catalog.DeezerClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.UserFromContext(r.Context())
+		forceRefresh := r.URL.Query().Get("refresh") == "1"
+
+		result, err := getSmartPlaylists(r.Context(), queries, deezer, user.ID, forceRefresh)
+		if err != nil {
+			apihttp.Error(w, http.StatusInternalServerError, "Erreur serveur.")
+			return
+		}
+		apihttp.JSON(w, http.StatusOK, result)
+	}
+}
+
+// handleGetArtistPlaylists is GET /api/smart-playlists/artist/{artistId}
+// ?name=<artist name> — the on-demand counterpart to the artist half of
+// GET /api/smart-playlists: search (any artist Deezer resolves, not just
+// this account's own top-listened ones) calls this to build the "100% X" /
+// "X Radio" pair for whichever artist the user just searched, so a custom
+// playlist search isn't limited to what already happens to be on the home
+// shelf. [name] comes from the client rather than a second Deezer lookup —
+// it already has it from the artist search result that led here, and using
+// exactly what the user saw avoids a redundant round trip.
+func handleGetArtistPlaylists(deezer *catalog.DeezerClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artistID, err := strconv.ParseInt(chi.URLParam(r, "artistId"), 10, 64)
+		if err != nil || artistID <= 0 {
+			apihttp.Error(w, http.StatusBadRequest, "Identifiant d'artiste invalide.")
+			return
+		}
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if name == "" {
+			apihttp.Error(w, http.StatusBadRequest, "Nom d'artiste requis.")
+			return
+		}
+
+		playlists := buildArtistPlaylists(r.Context(), deezer, artistRef{ID: artistID, Name: name})
+		if playlists == nil {
+			playlists = []SmartPlaylistDTO{}
+		}
+		apihttp.JSON(w, http.StatusOK, map[string]any{"playlists": playlists})
 	}
 }

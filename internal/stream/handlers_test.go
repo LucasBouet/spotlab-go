@@ -23,6 +23,81 @@ func newDownloadRouter(manager *Manager) chi.Router {
 	return r
 }
 
+func newStreamRouter(manager *Manager) chi.Router {
+	r := chi.NewRouter()
+	r.Get("/api/stream/{id}", handleStream(manager))
+	return r
+}
+
+func TestHandleStreamServesLiveBytesOnSuccessfulFetch(t *testing.T) {
+	fake := newFakeExecutable(t, `
+case "$1" in
+  ytsearch*)
+    echo '{"id":"fake-video-id","title":"Master of Puppets","uploader":"Metallica","duration":515}'
+    ;;
+  *)
+`+printToFileSidecarScript+`
+    printf 'opus' > "$sidecar"
+    printf 'hello '
+    sleep 0.3
+    printf 'world'
+    ;;
+esac
+`)
+	manager := NewManager(t.Context(), t.TempDir(), fake, "", newTestDeezerTrackServer(t))
+	r := newStreamRouter(manager)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stream/123", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, attendu 200, body = %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Accept-Ranges"); got != "none" {
+		t.Errorf("Accept-Ranges = %q, attendu none (flux en direct, pas encore seekable — la pause de 300ms avant le second morceau doit largement dépasser extPollInterval, pour que la requête attrape le fichier encore en cours)", got)
+	}
+	if got := w.Body.String(); got != "hello world" {
+		t.Errorf("body = %q, attendu %q", got, "hello world")
+	}
+}
+
+// TestHandleStreamReturns502WhenFetchProducesNoBytes guards the regression
+// this fix closes: a fetch that fails right after picking a format (real
+// example: YouTube 403ing the actual download while the format list still
+// resolved) used to still answer 200 with an empty body — indistinguishable
+// from a genuinely playable but silent track. It must answer a real error
+// instead, so the client can retry/skip rather than "playing" nothing.
+func TestHandleStreamReturns502WhenFetchProducesNoBytes(t *testing.T) {
+	fake := newFakeExecutable(t, `
+case "$1" in
+  ytsearch*)
+    echo '{"id":"fake-video-id","title":"Master of Puppets","uploader":"Metallica","duration":515}'
+    ;;
+  *)
+`+printToFileSidecarScript+`
+    printf 'opus' > "$sidecar"
+    sleep 0.3
+    echo "ERROR: unable to download video data: HTTP Error 403: Forbidden" >&2
+    exit 1
+    ;;
+esac
+`)
+	manager := NewManager(t.Context(), t.TempDir(), fake, "", newTestDeezerTrackServer(t))
+	r := newStreamRouter(manager)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stream/123", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, attendu 502 (jamais un 200 vide)", w.Code)
+	}
+	if w.Body.Len() == 0 {
+		t.Error("body vide — attendu un message d'erreur exploitable par le client")
+	}
+}
+
 func TestHandleDownloadRejectsInvalidTrackID(t *testing.T) {
 	manager := newTestManagerWithCachedTrack(t, "123", "audio")
 	r := newDownloadRouter(manager)

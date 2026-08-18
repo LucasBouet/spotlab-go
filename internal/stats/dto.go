@@ -62,3 +62,21 @@ type RecommendationsDTO struct {
 	Tracks          []RecTrackDTO `json:"tracks"`
 	Albums          []RecAlbumDTO `json:"albums"`
 }
+
+// SmartPlaylistDTO is one auto-generated "home screen" playlist — an
+// artist's own catalogue or Deezer radio mix, or a genre/decade drawn from
+// this account's own listening history. Read-only: not a row in `playlists`,
+// nothing here can be renamed/deleted/reordered by the client.
+type SmartPlaylistDTO struct {
+	ID       string        `json:"id"`
+	Kind     string        `json:"kind"` // "artist_all" | "artist_radio" | "genre" | "decade"
+	Title    string        `json:"title"`
+	Subtitle string        `json:"subtitle"`
+	Cover    string        `json:"cover"`
+	Tracks   []RecTrackDTO `json:"tracks"`
+}
+
+// SmartPlaylistsDTO is the GET /api/smart-playlists payload.
+type SmartPlaylistsDTO struct {
+	Playlists []SmartPlaylistDTO `json:"playlists"`
+}

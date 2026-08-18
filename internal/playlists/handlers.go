@@ -40,6 +40,7 @@ func Mount(r chi.Router, requireAuth func(http.Handler) http.Handler, sqlDB *sql
 		r.Use(requireAuth)
 		r.Get("/api/playlists", handleList(queries))
 		r.Post("/api/playlists", handleCreate(queries))
+		r.Put("/api/playlists/order", handleOrder(queries))
 		r.Get("/api/playlists/membership", handleMembership(queries))
 		r.Post("/api/playlists/import", handleImport(sqlDB, queries, deezer, importClient))
 		r.Get("/api/playlists/{id}", handleDetail(queries))
@@ -85,6 +86,44 @@ func handleCreate(queries *db.Queries) http.HandlerFunc {
 			return
 		}
 		apihttp.JSON(w, http.StatusCreated, map[string]any{"playlist": playlistRefDTO(playlist)})
+	}
+}
+
+type orderRequest struct {
+	Positions map[string]int64 `json:"positions"`
+	Pinned    []string         `json:"pinned"`
+}
+
+// handleOrder is PUT /api/playlists/order: the client always sends its
+// complete current arrangement (every playlist it has, in the order it
+// wants) rather than a delta — simpler than incremental move operations,
+// and self-correcting if a previous request was ever only partially
+// applied. Any id in the body that isn't owned by the caller is silently
+// skipped (RowsAffected 0), same "don't leak existence" reasoning as every
+// other ownership-scoped update in this package.
+func handleOrder(queries *db.Queries) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.UserFromContext(r.Context())
+
+		var body orderRequest
+		if !apihttp.DecodeJSON(w, r, &body) {
+			return
+		}
+
+		pinned := make(map[string]bool, len(body.Pinned))
+		for _, id := range body.Pinned {
+			pinned[id] = true
+		}
+
+		for id, position := range body.Positions {
+			if _, err := queries.UpdatePlaylistOrderRow(r.Context(), db.UpdatePlaylistOrderRowParams{
+				ID: id, UserID: user.ID, Pinned: pinned[id], Position: position,
+			}); err != nil {
+				apihttp.Error(w, http.StatusInternalServerError, "Erreur inattendue.")
+				return
+			}
+		}
+		apihttp.JSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
 

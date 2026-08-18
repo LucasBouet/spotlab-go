@@ -172,6 +172,106 @@ func TestDeletePlaylistTrackOwnedRejectsWrongOwner(t *testing.T) {
 	}
 }
 
+func TestUpdatePlaylistOrderRowSetsPinnedAndPosition(t *testing.T) {
+	queries, userID := newTestQueries(t)
+	ctx := context.Background()
+	playlist, err := queries.CreatePlaylist(ctx, dbgen.CreatePlaylistParams{ID: idgen.New(), UserID: userID, Name: "P"})
+	if err != nil {
+		t.Fatalf("CreatePlaylist: %v", err)
+	}
+
+	rows, err := queries.UpdatePlaylistOrderRow(ctx, dbgen.UpdatePlaylistOrderRowParams{
+		ID: playlist.ID, UserID: userID, Pinned: true, Position: 3,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlaylistOrderRow: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("rows = %d, attendu 1", rows)
+	}
+
+	got, err := queries.GetPlaylistOwned(ctx, dbgen.GetPlaylistOwnedParams{ID: playlist.ID, UserID: userID})
+	if err != nil {
+		t.Fatalf("GetPlaylistOwned: %v", err)
+	}
+	if !got.Pinned || got.Position != 3 {
+		t.Errorf("Pinned/Position = %v/%d, attendu true/3", got.Pinned, got.Position)
+	}
+}
+
+func TestUpdatePlaylistOrderRowRejectsWrongOwner(t *testing.T) {
+	queries, userA := newTestQueries(t)
+	ctx := context.Background()
+	userB, err := queries.CreateUser(ctx, dbgen.CreateUserParams{
+		ID: idgen.New(), Email: "b2@example.com", PasswordHash: "x", Role: "USER",
+	})
+	if err != nil {
+		t.Fatalf("création du second utilisateur: %v", err)
+	}
+	playlist, err := queries.CreatePlaylist(ctx, dbgen.CreatePlaylistParams{ID: idgen.New(), UserID: userA, Name: "P"})
+	if err != nil {
+		t.Fatalf("CreatePlaylist: %v", err)
+	}
+
+	rows, err := queries.UpdatePlaylistOrderRow(ctx, dbgen.UpdatePlaylistOrderRowParams{
+		ID: playlist.ID, UserID: userB.ID, Pinned: true, Position: 1,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlaylistOrderRow: %v", err)
+	}
+	if rows != 0 {
+		t.Error("un utilisateur ne doit jamais pouvoir réordonner la playlist de quelqu'un d'autre")
+	}
+}
+
+// TestListPlaylistsByUserOrdersPinnedFirstThenPosition guards the ORDER BY
+// in ListPlaylistsByUser: pinned playlists always sort before unpinned
+// ones, and within each group the manual position wins over recency.
+func TestListPlaylistsByUserOrdersPinnedFirstThenPosition(t *testing.T) {
+	queries, userID := newTestQueries(t)
+	ctx := context.Background()
+
+	newest, err := queries.CreatePlaylist(ctx, dbgen.CreatePlaylistParams{ID: idgen.New(), UserID: userID, Name: "Newest, unpinned"})
+	if err != nil {
+		t.Fatalf("CreatePlaylist: %v", err)
+	}
+	pinnedSecond, err := queries.CreatePlaylist(ctx, dbgen.CreatePlaylistParams{ID: idgen.New(), UserID: userID, Name: "Pinned, position 1"})
+	if err != nil {
+		t.Fatalf("CreatePlaylist: %v", err)
+	}
+	pinnedFirst, err := queries.CreatePlaylist(ctx, dbgen.CreatePlaylistParams{ID: idgen.New(), UserID: userID, Name: "Pinned, position 0"})
+	if err != nil {
+		t.Fatalf("CreatePlaylist: %v", err)
+	}
+
+	if _, err := queries.UpdatePlaylistOrderRow(ctx, dbgen.UpdatePlaylistOrderRowParams{
+		ID: pinnedFirst.ID, UserID: userID, Pinned: true, Position: 0,
+	}); err != nil {
+		t.Fatalf("UpdatePlaylistOrderRow: %v", err)
+	}
+	if _, err := queries.UpdatePlaylistOrderRow(ctx, dbgen.UpdatePlaylistOrderRowParams{
+		ID: pinnedSecond.ID, UserID: userID, Pinned: true, Position: 1,
+	}); err != nil {
+		t.Fatalf("UpdatePlaylistOrderRow: %v", err)
+	}
+
+	rows, err := queries.ListPlaylistsByUser(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListPlaylistsByUser: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("len(rows) = %d, attendu 3", len(rows))
+	}
+	got := []string{rows[0].ID, rows[1].ID, rows[2].ID}
+	want := []string{pinnedFirst.ID, pinnedSecond.ID, newest.ID}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ordre = %v, attendu [pinnedFirst, pinnedSecond, newest]", got)
+			break
+		}
+	}
+}
+
 func TestListPlaylistMembership(t *testing.T) {
 	queries, userID := newTestQueries(t)
 	ctx := context.Background()

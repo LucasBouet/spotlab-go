@@ -8,3 +8,5 @@
 .env.local
 /bin/
 activation_private.pem
+mtls-ca.key
+mtls-ca.crt

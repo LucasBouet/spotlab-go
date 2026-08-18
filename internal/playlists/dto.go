@@ -11,6 +11,8 @@ import (
 type PlaylistSummaryDTO struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
+	Pinned     bool     `json:"pinned"`
+	Position   int64    `json:"position"`
 	TrackCount int64    `json:"trackCount"`
 	Covers     []string `json:"covers"`
 	CreatedAt  string   `json:"createdAt"`
@@ -25,6 +27,8 @@ func playlistSummaryDTO(p db.PlaylistWithCovers) PlaylistSummaryDTO {
 	return PlaylistSummaryDTO{
 		ID:         p.ID,
 		Name:       p.Name,
+		Pinned:     p.Pinned,
+		Position:   p.Position,
 		TrackCount: p.TrackCount,
 		Covers:     covers,
 		CreatedAt:  p.CreatedAt.Format(time.RFC3339),

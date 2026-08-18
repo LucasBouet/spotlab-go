@@ -127,15 +127,16 @@ func runDownload(ctx context.Context, ytdlpPath, videoID, destDir, trackID strin
 	downloadCtx, cancel := context.WithTimeout(ctx, downloadTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(downloadCtx, ytdlpPath,
-		"https://www.youtube.com/watch?v="+videoID,
+	args := append([]string{
+		"https://www.youtube.com/watch?v=" + videoID,
 		"-o", "-",
 		"--format", "bestaudio/best",
 		"--no-playlist",
 		"--no-warnings",
 		"--quiet",
 		"--print-to-file", "%(ext)s", extSidecar,
-	)
+	}, youtubeExtractorArgs...)
+	cmd := exec.CommandContext(downloadCtx, ytdlpPath, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		download.fail(fmt.Errorf("le téléchargement du titre a échoué : %w", err))

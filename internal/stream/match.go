@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/text/runes"
@@ -22,10 +23,88 @@ import (
 // DURATION_TOLERANCE_SECONDS in ytmusic.ts. Search itself moved from
 // ytmusic-api (no Go equivalent) to yt-dlp's own `ytsearchN:` — see
 // docs/PLAN.md §0/§4.2 — but the scoring stayed a direct port.
+//
+// That move quietly dropped a filter the old search had for free:
+// ytmusic-api's searchSongs() only ever returned YouTube Music's curated
+// "Songs" catalog — clean studio audio, essentially never a music video, a
+// live cut, or anything with a spoken intro. A plain `ytsearchN:` returns
+// whatever ranks on YouTube, official "clip" uploads included, and those
+// can land well within duration/title/artist tolerance while still not
+// being the actual track (extra content at the start/middle/end desyncs
+// playback position and lyrics). preferredUploaderSuffix and the
+// demotedTitle* lists are a substitute for that lost filter.
 const (
 	searchResultCount        = 5
 	durationToleranceSeconds = 12
+
+	// YouTube auto-generates "<artist> - Topic" channels from official
+	// releases (content ID, not a human upload) — audio only, always
+	// matching the real release exactly. The single most reliable signal
+	// available without ytmusic-api's catalog restriction.
+	preferredUploaderSuffix = "topic"
 )
+
+// searchTimeout bounds one yt-dlp search invocation — mirrors downloadTimeout
+// in pipeline.go, which only ever guarded the download half of a fetch. The
+// search half (this file) had no bound at all: a yt-dlp search that stalls
+// (YouTube throttling/anti-bot changes, network stall) used to hang GET
+// /api/stream/{id} for any uncached track forever, since manager.go's
+// server-lifetime ctx has no deadline of its own. That reads to the app as
+// "never loads" until some unrelated network hop eventually kills the idle
+// connection — fixed by giving this step the same kind of bound the download
+// step already had. A var, not a const, so tests can shrink it instead of
+// actually waiting out a multi-second timeout.
+var searchTimeout = 30 * time.Second
+
+// youtubeExtractorArgs forces yt-dlp to use YouTube's "android" client for
+// both search and download. As of writing, YouTube's default (web) client
+// requires a PO token to fetch actual media bytes that yt-dlp doesn't
+// supply, so a plain fetch answers 403 Forbidden on every real download
+// even though search (a different endpoint) still works fine — verified
+// directly against the real API: web 403s, android succeeds. The tradeoff:
+// android only ever offers one muxed video+audio format, never a separate
+// audio-only stream, so a cached file carries a small unused video track
+// (a few extra MB) instead of being pure audio.
+var youtubeExtractorArgs = []string{"--extractor-args", "youtube:player_client=android"}
+
+// demotedTitlePhrases and demotedTitleWords flag candidates that are
+// probably not the plain track: official music videos, live performances,
+// lyric videos, and similar uploads that share the track's title/artist
+// and often a close-enough duration, but contain content (intros, crowd
+// noise, spoken bits) the studio track doesn't.
+var demotedTitlePhrases = []string{
+	"official video",
+	"music video",
+	"behind the scenes",
+	"lyric video",
+}
+
+var demotedTitleWords = map[string]bool{
+	"live":      true,
+	"clip":      true,
+	"lyrics":    true,
+	"trailer":   true,
+	"teaser":    true,
+	"interview": true,
+	"reaction":  true,
+}
+
+// hasDemotedTitleSignal expects an already-[normalize]d title: matching
+// whole words (via Fields) rather than raw substrings avoids flagging
+// something like "olive" for containing "live".
+func hasDemotedTitleSignal(normalizedTitle string) bool {
+	for _, phrase := range demotedTitlePhrases {
+		if strings.Contains(normalizedTitle, phrase) {
+			return true
+		}
+	}
+	for _, word := range strings.Fields(normalizedTitle) {
+		if demotedTitleWords[word] {
+			return true
+		}
+	}
+	return false
+}
 
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -89,6 +168,12 @@ func scoreCandidate(c ytDlpSearchResult, query MatchQuery) float64 {
 			score -= 1
 		}
 	}
+	if strings.HasSuffix(candidateArtist, preferredUploaderSuffix) {
+		score += 2
+	}
+	if hasDemotedTitleSignal(candidateTitle) {
+		score -= 2.5
+	}
 	return score
 }
 
@@ -99,14 +184,20 @@ func FindBestMatch(ctx context.Context, ytdlpPath string, query MatchQuery) (str
 	if ytdlpPath == "" {
 		ytdlpPath = "yt-dlp"
 	}
+	searchCtx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+
 	searchTerm := fmt.Sprintf("ytsearch%d:%s %s", searchResultCount, query.Artist, query.Title)
-	cmd := exec.CommandContext(ctx, ytdlpPath, searchTerm,
-		"--dump-json", "--no-warnings", "--quiet", "--flat-playlist")
+	args := append([]string{searchTerm, "--dump-json", "--no-warnings", "--quiet", "--flat-playlist"}, youtubeExtractorArgs...)
+	cmd := exec.CommandContext(searchCtx, ytdlpPath, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if searchCtx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("la recherche YouTube a mis trop de temps à répondre")
+		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = err.Error()

@@ -32,7 +32,7 @@ type PlaylistWithCovers struct {
 func (q *Queries) ListPlaylistsByUser(ctx context.Context, userID string) ([]PlaylistWithCovers, error) {
 	rows, err := q.db.QueryContext(ctx, `
 		SELECT
-			p.id, p.user_id, p.name, p.created_at, p.updated_at,
+			p.id, p.user_id, p.name, p.pinned, p.position, p.created_at, p.updated_at,
 			(SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id = p.id) AS track_count,
 			(
 				SELECT COALESCE(json_group_array(cover), '[]')
@@ -45,7 +45,7 @@ func (q *Queries) ListPlaylistsByUser(ctx context.Context, userID string) ([]Pla
 			) AS covers_json
 		FROM playlists p
 		WHERE p.user_id = ?
-		ORDER BY p.created_at DESC`,
+		ORDER BY p.pinned DESC, p.position ASC, p.created_at DESC`,
 		userID,
 	)
 	if err != nil {
@@ -57,7 +57,7 @@ func (q *Queries) ListPlaylistsByUser(ctx context.Context, userID string) ([]Pla
 	for rows.Next() {
 		var p PlaylistWithCovers
 		var coversJSON string
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Name, &p.CreatedAt, &p.UpdatedAt,
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Name, &p.Pinned, &p.Position, &p.CreatedAt, &p.UpdatedAt,
 			&p.TrackCount, &coversJSON); err != nil {
 			return nil, err
 		}
@@ -80,11 +80,11 @@ type GetPlaylistOwnedParams struct {
 // error.
 func (q *Queries) GetPlaylistOwned(ctx context.Context, arg GetPlaylistOwnedParams) (Playlist, error) {
 	row := q.db.QueryRowContext(ctx,
-		"SELECT id, user_id, name, created_at, updated_at FROM playlists WHERE id = ? AND user_id = ?",
+		"SELECT id, user_id, name, pinned, position, created_at, updated_at FROM playlists WHERE id = ? AND user_id = ?",
 		arg.ID, arg.UserID,
 	)
 	var p Playlist
-	err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.Pinned, &p.Position, &p.CreatedAt, &p.UpdatedAt)
 	return p, err
 }
 
@@ -117,12 +117,35 @@ type CreatePlaylistParams struct {
 
 func (q *Queries) CreatePlaylist(ctx context.Context, arg CreatePlaylistParams) (Playlist, error) {
 	row := q.db.QueryRowContext(ctx,
-		"INSERT INTO playlists (id, user_id, name) VALUES (?, ?, ?) RETURNING id, user_id, name, created_at, updated_at",
+		"INSERT INTO playlists (id, user_id, name) VALUES (?, ?, ?) RETURNING id, user_id, name, pinned, position, created_at, updated_at",
 		arg.ID, arg.UserID, arg.Name,
 	)
 	var p Playlist
-	err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.Pinned, &p.Position, &p.CreatedAt, &p.UpdatedAt)
 	return p, err
+}
+
+// UpdatePlaylistOrderRow sets one playlist's manual sort position and pin
+// flag in a single UPDATE — the reorder endpoint calls this once per id in
+// the client's full desired arrangement (see handlePlaylistOrder), so this
+// stays a single round trip per row rather than two. RowsAffected of 0
+// means "not found or not owned", same convention as RenamePlaylist.
+type UpdatePlaylistOrderRowParams struct {
+	ID       string
+	UserID   string
+	Pinned   bool
+	Position int64
+}
+
+func (q *Queries) UpdatePlaylistOrderRow(ctx context.Context, arg UpdatePlaylistOrderRowParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx,
+		"UPDATE playlists SET pinned = ?, position = ? WHERE id = ? AND user_id = ?",
+		arg.Pinned, arg.Position, arg.ID, arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 type RenamePlaylistParams struct {

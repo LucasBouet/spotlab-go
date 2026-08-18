@@ -17,6 +17,7 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/admin"
 	"github.com/lucasbouet/spotlab-go/internal/apihttp"
 	"github.com/lucasbouet/spotlab-go/internal/auth"
+	"github.com/lucasbouet/spotlab-go/internal/blend"
 	"github.com/lucasbouet/spotlab-go/internal/catalog"
 	"github.com/lucasbouet/spotlab-go/internal/config"
 	"github.com/lucasbouet/spotlab-go/internal/db"
@@ -25,6 +26,7 @@ import (
 	"github.com/lucasbouet/spotlab-go/internal/library"
 	"github.com/lucasbouet/spotlab-go/internal/logging"
 	"github.com/lucasbouet/spotlab-go/internal/playlists"
+	"github.com/lucasbouet/spotlab-go/internal/shelf"
 	"github.com/lucasbouet/spotlab-go/internal/social"
 	"github.com/lucasbouet/spotlab-go/internal/stats"
 	"github.com/lucasbouet/spotlab-go/internal/stream"
@@ -107,6 +109,8 @@ func main() {
 		return dto
 	}
 	social.Mount(router, requireAuth, queries, activity)
+	blend.Mount(router, requireAuth, queries)
+	shelf.Mount(router, requireAuth, queries)
 
 	sync.Mount(router, requireAuth, hub, queries)
 

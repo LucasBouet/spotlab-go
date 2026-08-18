@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/lucasbouet/spotlab-go/internal/catalog"
 	db "github.com/lucasbouet/spotlab-go/internal/db/gen"
@@ -106,4 +107,47 @@ func ensureTrackGenre(ctx context.Context, queries *db.Queries, deezer *catalog.
 		params.GenreName = sql.NullString{String: deezerGenre.GenreName, Valid: true}
 	}
 	_ = queries.InsertTrackGenre(ctx, params)
+}
+
+// ensureTrackReleaseYear resolves and caches a track's release year the
+// first time it's played — the decade-playlist equivalent of
+// ensureTrackGenre above, global cache, same lazy/best-effort shape.
+// Deezer's track object carries release_date directly (confirmed against
+// the real API: e.g. `/track/3135556` -> "release_date":"2001-03-12"), so
+// this is one Deezer round-trip, no album fetch needed.
+func ensureTrackReleaseYear(ctx context.Context, queries *db.Queries, deezer *catalog.DeezerClient, deezerTrackID int64) {
+	if _, err := queries.GetTrackReleaseYear(ctx, deezerTrackID); err == nil {
+		return // already resolved
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+
+	raw, ok := deezer.FetchTrack(ctx, strconv.FormatInt(deezerTrackID, 10))
+	if !ok {
+		return
+	}
+	var track struct {
+		ReleaseDate string `json:"release_date"`
+		Album       struct {
+			ReleaseDate string `json:"release_date"`
+		} `json:"album"`
+	}
+	if err := json.Unmarshal(raw, &track); err != nil {
+		return
+	}
+	dateStr := track.ReleaseDate
+	if dateStr == "" {
+		dateStr = track.Album.ReleaseDate
+	}
+	if len(dateStr) < 4 {
+		return
+	}
+	year, err := strconv.Atoi(dateStr[:4])
+	if err != nil || year < 1900 || year > time.Now().Year()+1 {
+		return // implausible value — leave unresolved rather than cache garbage
+	}
+
+	_ = queries.InsertTrackReleaseYear(ctx, db.InsertTrackReleaseYearParams{
+		DeezerTrackID: deezerTrackID, Year: int64(year),
+	})
 }

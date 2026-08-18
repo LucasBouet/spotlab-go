@@ -70,16 +70,30 @@ func serveCachedFile(w http.ResponseWriter, r *http.Request, filePath string) {
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
+// serveLiveStream tails result.Reader into the response. The first Read
+// happens *before* any header is written: once WriteHeader(200) ships,
+// Go's http.ResponseWriter can never downgrade the status, so a download
+// that fails right after picking a format (yt-dlp killed, network drop,
+// upstream 403 before any audio byte arrives) used to still commit to a
+// 200 with nothing after it — indistinguishable, to a player, from "still
+// buffering" until it eventually gives up. Deciding the status on the
+// first read instead means a fetch that never produces a single byte
+// answers with a real 502 the client can act on immediately.
 func serveLiveStream(w http.ResponseWriter, result StreamResult) {
+	buf := make([]byte, 64*1024)
+	n, err := result.Reader.Read(buf)
+	if n == 0 {
+		apihttp.Error(w, http.StatusBadGateway, streamErrorMessage(err))
+		return
+	}
+
 	w.Header().Set("Content-Type", result.ContentType)
 	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-
 	flusher, _ := w.(http.Flusher)
-	buf := make([]byte, 64*1024)
+
 	for {
-		n, err := result.Reader.Read(buf)
 		if n > 0 {
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
 				return // client disconnected
@@ -94,6 +108,7 @@ func serveLiveStream(w http.ResponseWriter, result StreamResult) {
 			// same limitation once headers are already sent.
 			return
 		}
+		n, err = result.Reader.Read(buf)
 	}
 }
 
