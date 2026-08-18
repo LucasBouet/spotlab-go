@@ -31,6 +31,7 @@ func Mount(r chi.Router, requireAuth func(http.Handler) http.Handler, queries *d
 		r.Get("/api/recommendations", handleGetRecommendations(queries, deezer))
 		r.Get("/api/smart-playlists", handleGetSmartPlaylists(queries, deezer))
 		r.Get("/api/smart-playlists/artist/{artistId}", handleGetArtistPlaylists(deezer))
+		r.Get("/api/smart-playlists/search", handleGetSearchedPlaylist(deezer))
 	})
 }
 
@@ -202,6 +203,33 @@ func handleGetArtistPlaylists(deezer *catalog.DeezerClient) http.HandlerFunc {
 		}
 
 		playlists := buildArtistPlaylists(r.Context(), deezer, artistRef{ID: artistID, Name: name})
+		if playlists == nil {
+			playlists = []SmartPlaylistDTO{}
+		}
+		apihttp.JSON(w, http.StatusOK, map[string]any{"playlists": playlists})
+	}
+}
+
+// handleGetSearchedPlaylist is GET /api/smart-playlists/search?q=<query> —
+// the genre/mood/style counterpart to handleGetArtistPlaylists above: a
+// search query that isn't (or isn't only) an artist name still deserves a
+// real playlist result, via Deezer's own curated playlist search rather
+// than an artist-name coincidence. See buildSearchedPlaylist for why this
+// exists. Zero matches is a valid answer (empty array, 200), not an error —
+// the client merges this into the same search results an artist-name match
+// already produces, and most queries won't hit both.
+func handleGetSearchedPlaylist(deezer *catalog.DeezerClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
+		if query == "" {
+			apihttp.Error(w, http.StatusBadRequest, "Requête manquante.")
+			return
+		}
+
+		var playlists []SmartPlaylistDTO
+		if playlist := buildSearchedPlaylist(r.Context(), deezer, query); playlist != nil {
+			playlists = append(playlists, *playlist)
+		}
 		if playlists == nil {
 			playlists = []SmartPlaylistDTO{}
 		}

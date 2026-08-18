@@ -69,7 +69,7 @@ type RecommendationsDTO struct {
 // nothing here can be renamed/deleted/reordered by the client.
 type SmartPlaylistDTO struct {
 	ID       string        `json:"id"`
-	Kind     string        `json:"kind"` // "artist_all" | "artist_radio" | "genre" | "decade"
+	Kind     string        `json:"kind"` // "artist_all" | "artist_radio" | "genre" | "decade" | "playlist_search"
 	Title    string        `json:"title"`
 	Subtitle string        `json:"subtitle"`
 	Cover    string        `json:"cover"`

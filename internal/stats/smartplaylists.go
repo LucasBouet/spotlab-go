@@ -24,13 +24,23 @@ const (
 	smartPlaylistsCacheTTL = 24 * time.Hour
 
 	smartPlaylistSeedArtists      = 3
-	smartPlaylistArtistTrackLimit = 25
+	smartPlaylistArtistTrackLimit = 50
 
 	smartPlaylistSeedGenres      = 2
-	smartPlaylistGenreTrackLimit = 30
+	smartPlaylistGenreTrackLimit = 50
 
 	smartPlaylistSeedDecades      = 1
-	smartPlaylistDecadeTrackLimit = 30
+	smartPlaylistDecadeTrackLimit = 50
+
+	// smartPlaylistSearchTrackLimit matches Spotify's own genre/mood
+	// playlists' rough size, not Deezer's — those editorial playlists
+	// routinely run to 100+ tracks, so this is a display cap, not a
+	// scarcity limit like the history-based genre/decade ones above.
+	smartPlaylistSearchTrackLimit = 50
+	// smartPlaylistSearchMinTracks weeds out an empty/private stub Deezer's
+	// own playlist search occasionally ranks ahead of the real editorial
+	// compilation (see buildSearchedPlaylist).
+	smartPlaylistSearchMinTracks = 15
 )
 
 func slugify(value string) string {
@@ -128,6 +138,79 @@ func buildArtistPlaylists(ctx context.Context, deezer *catalog.DeezerClient, art
 	}
 
 	return out
+}
+
+// deezerPlaylistSearchJSON is one hit from GET /search/playlist — only the
+// fields buildSearchedPlaylist actually needs out of Deezer's much wider
+// playlist object.
+type deezerPlaylistSearchJSON struct {
+	ID            int64  `json:"id"`
+	Title         string `json:"title"`
+	Public        bool   `json:"public"`
+	NbTracks      int    `json:"nb_tracks"`
+	PictureMedium string `json:"picture_medium"`
+}
+
+// buildSearchedPlaylist is the fix for a real bug: search used to only ever
+// find a "playlist" by matching a query against an *artist's* name (any
+// artist Deezer resolved got a "100% X"/"X Radio" pair built for it) — so
+// searching a genre like "metalcore" could surface a "100% Metalcore" pair
+// built from some obscure, unrelated artist who just happens to share that
+// name, instead of an actual metalcore playlist. This calls Deezer's own
+// playlist search instead, which for a genre/mood/style-shaped query
+// reliably ranks a real editorial compilation (Deezer employs genre editors
+// who maintain exactly these) at or near the top — the Public/NbTracks
+// check only exists to skip past an empty or private stub landing ahead of
+// it, not to do the actual relevance ranking.
+func buildSearchedPlaylist(ctx context.Context, deezer *catalog.DeezerClient, query string) *SmartPlaylistDTO {
+	raw, ok := deezer.SearchPlaylists(ctx, query, 10)
+	if !ok {
+		return nil
+	}
+	var results []deezerPlaylistSearchJSON
+	if json.Unmarshal(raw, &results) != nil {
+		return nil
+	}
+	var match *deezerPlaylistSearchJSON
+	for i := range results {
+		if results[i].Public && results[i].NbTracks >= smartPlaylistSearchMinTracks {
+			match = &results[i]
+			break
+		}
+	}
+	if match == nil {
+		return nil
+	}
+
+	page, ok := deezer.FetchPlaylistTracksPage(ctx, strconv.FormatInt(match.ID, 10), smartPlaylistSearchTrackLimit)
+	if !ok {
+		return nil
+	}
+	var parsed struct {
+		Data []deezerTrackJSON `json:"data"`
+	}
+	if json.Unmarshal(page, &parsed) != nil {
+		return nil
+	}
+	tracks := make([]RecTrackDTO, 0, len(parsed.Data))
+	for _, t := range parsed.Data {
+		if t.ID != 0 {
+			tracks = append(tracks, t.toDTO())
+		}
+	}
+	if len(tracks) == 0 {
+		return nil
+	}
+
+	cover := match.PictureMedium
+	if cover == "" {
+		cover = coverOf(tracks)
+	}
+	return &SmartPlaylistDTO{
+		ID: "search-playlist-" + strconv.FormatInt(match.ID, 10), Kind: "playlist_search",
+		Title: match.Title, Subtitle: "Playlist Deezer",
+		Cover: cover, Tracks: tracks,
+	}
 }
 
 func buildGenrePlaylist(ctx context.Context, queries *db.Queries, deezer *catalog.DeezerClient, userID, genreName string) *SmartPlaylistDTO {

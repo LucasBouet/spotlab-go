@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -172,6 +173,14 @@ func (c *DeezerClient) FetchArtistRadio(ctx context.Context, artistID string, li
 
 func (c *DeezerClient) FetchChart(ctx context.Context, limit int) (json.RawMessage, bool) {
 	return c.fetch(ctx, "/chart?limit="+strconv.Itoa(limit))
+}
+
+// SearchPlaylists backs the "type a genre/mood, get a real curated
+// playlist" smart-playlist search (internal/stats/smartplaylists.go): a
+// free-text query against Deezer's own editorial + user playlists, not the
+// track/album/artist search internal/catalog/handlers.go already exposes.
+func (c *DeezerClient) SearchPlaylists(ctx context.Context, query string, limit int) (json.RawMessage, bool) {
+	return c.fetchDataArray(ctx, "/search/playlist?q="+url.QueryEscape(query)+"&limit="+strconv.Itoa(limit))
 }
 
 // FetchPlaylist and FetchPlaylistTracksPage back internal/playlists' Deezer
