@@ -46,6 +46,52 @@ EOF
 	}
 }
 
+// TestFindBestMatchPrefersCleanPartialMatchOverHigherScoringLiveVersion
+// guards the regression reported live: some tracks resolved to a live
+// recording "for no reason" even though a studio upload was also among the
+// candidates. hasDemotedTitleSignal's -2.5 penalty is soft, so an
+// exact-everything live candidate can still out-score a merely-partial
+// match on the real studio upload (e.g. a slightly different uploader
+// name) — this asserts the studio upload wins regardless, as long as it
+// genuinely matches title and artist.
+func TestFindBestMatchPrefersCleanPartialMatchOverHigherScoringLiveVersion(t *testing.T) {
+	fake := newFakeExecutable(t, `cat <<'EOF'
+{"id":"vid-live","title":"Rockstar (Live at Wembley)","uploader":"Post Malone","duration":218}
+{"id":"vid-studio","title":"Rockstar","uploader":"Post Malone Music","duration":218}
+EOF
+`)
+	videoID, err := FindBestMatch(context.Background(), fake, MatchQuery{
+		Title: "Rockstar", Artist: "Post Malone", DurationSeconds: 218,
+	})
+	if err != nil {
+		t.Fatalf("FindBestMatch: %v", err)
+	}
+	if videoID != "vid-studio" {
+		t.Errorf("videoID = %q, attendu vid-studio (une version live ne doit jamais gagner face à un candidat propre correctement matché)", videoID)
+	}
+}
+
+// TestFindBestMatchFallsBackToLiveVersionWhenNothingElseMatches ensures the
+// override doesn't turn into a hard exclusion: if every candidate looks
+// live/lyric/etc, the best-scoring one among them should still be returned
+// rather than failing the whole resolution.
+func TestFindBestMatchFallsBackToLiveVersionWhenNothingElseMatches(t *testing.T) {
+	fake := newFakeExecutable(t, `cat <<'EOF'
+{"id":"vid-live-close","title":"Master of Puppets (Live)","uploader":"Metallica","duration":515}
+{"id":"vid-live-far","title":"Master of Puppets (Live in Seattle)","uploader":"Metallica Bootlegs","duration":900}
+EOF
+`)
+	videoID, err := FindBestMatch(context.Background(), fake, MatchQuery{
+		Title: "Master of Puppets", Artist: "Metallica", DurationSeconds: 515,
+	})
+	if err != nil {
+		t.Fatalf("FindBestMatch: %v", err)
+	}
+	if videoID != "vid-live-close" {
+		t.Errorf("videoID = %q, attendu vid-live-close (repli sur le meilleur score quand rien n'est propre)", videoID)
+	}
+}
+
 func TestFindBestMatchSkipsMalformedLinesAndBlankLines(t *testing.T) {
 	fake := newFakeExecutable(t, `cat <<'EOF'
 not json at all

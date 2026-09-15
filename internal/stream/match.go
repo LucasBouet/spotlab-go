@@ -19,8 +19,9 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// searchResultCount and durationToleranceSeconds mirror ytsearch5 and
-// DURATION_TOLERANCE_SECONDS in ytmusic.ts. Search itself moved from
+// searchResultCount and durationToleranceSeconds mirror ytsearch5 (bumped
+// to 8, see below) and DURATION_TOLERANCE_SECONDS in ytmusic.ts. Search
+// itself moved from
 // ytmusic-api (no Go equivalent) to yt-dlp's own `ytsearchN:` — see
 // docs/PLAN.md §0/§4.2 — but the scoring stayed a direct port.
 //
@@ -34,7 +35,11 @@ import (
 // playback position and lyrics). preferredUploaderSuffix and the
 // demotedTitle* lists are a substitute for that lost filter.
 const (
-	searchResultCount        = 5
+	// Widened from 5: with the "prefer a non-live/non-lyric candidate"
+	// override below, a bigger candidate pool matters more than it used
+	// to — the fix can only pick a clean studio upload if one actually
+	// showed up in the search results in the first place.
+	searchResultCount        = 8
 	durationToleranceSeconds = 12
 
 	// YouTube auto-generates "<artist> - Topic" channels from official
@@ -141,6 +146,24 @@ type ytDlpSearchResult struct {
 	Duration float64 `json:"duration"`
 }
 
+// hasTextualMatch reports whether a candidate's title *and* uploader both
+// resemble the query — used to gate the "prefer a non-live candidate"
+// override below at a genuine match, not just "some video with a similar
+// duration". Requiring both fields (not just one, like scoreCandidate's
+// softer partial-credit scoring) keeps a generic-titled unrelated video
+// from ever outranking a properly-matched live/lyric upload.
+func hasTextualMatch(c ytDlpSearchResult, query MatchQuery) bool {
+	candidateTitle := normalize(c.Title)
+	candidateArtist := normalize(c.Uploader)
+	queryTitle := normalize(query.Title)
+	queryArtist := normalize(query.Artist)
+	titleMatches := candidateTitle == queryTitle ||
+		strings.Contains(candidateTitle, queryTitle) || strings.Contains(queryTitle, candidateTitle)
+	artistMatches := candidateArtist == queryArtist ||
+		strings.Contains(candidateArtist, queryArtist) || strings.Contains(queryArtist, candidateArtist)
+	return titleMatches && artistMatches
+}
+
 func scoreCandidate(c ytDlpSearchResult, query MatchQuery) float64 {
 	candidateTitle := normalize(c.Title)
 	candidateArtist := normalize(c.Uploader)
@@ -205,8 +228,9 @@ func FindBestMatch(ctx context.Context, ytdlpPath string, query MatchQuery) (str
 		return "", fmt.Errorf("recherche yt-dlp : %s", detail)
 	}
 
-	var best string
+	var best, bestClean string
 	bestScore := math.Inf(-1)
+	bestCleanScore := math.Inf(-1)
 	scanner := bufio.NewScanner(&stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4<<20)
 	for scanner.Scan() {
@@ -221,12 +245,29 @@ func FindBestMatch(ctx context.Context, ytdlpPath string, query MatchQuery) (str
 		if candidate.ID == "" {
 			continue
 		}
-		if score := scoreCandidate(candidate, query); score > bestScore {
+		score := scoreCandidate(candidate, query)
+		if score > bestScore {
 			bestScore = score
 			best = candidate.ID
 		}
+		// hasDemotedTitleSignal's -2.5 penalty is a soft nudge: an exact
+		// title+artist+duration match on a live/lyric upload can still
+		// out-score a merely-partial match elsewhere, which is how a live
+		// version could win despite the penalty. So on top of scoring,
+		// track the best candidate that both matches genuinely (title AND
+		// artist, not just duration luck) and carries no demoted signal
+		// at all, and prefer it outright over the raw top score — falling
+		// back to bestScore only when every candidate looks demoted or
+		// unmatched.
+		if !hasDemotedTitleSignal(normalize(candidate.Title)) && hasTextualMatch(candidate, query) && score > bestCleanScore {
+			bestCleanScore = score
+			bestClean = candidate.ID
+		}
 	}
 
+	if bestClean != "" {
+		return bestClean, nil
+	}
 	if best == "" {
 		return "", errors.New("aucune correspondance trouvée sur YouTube")
 	}

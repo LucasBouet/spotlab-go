@@ -72,26 +72,58 @@ func TestQueueReducerPlayTrackClearsQueueAndKeepsShuffle(t *testing.T) {
 	}
 }
 
-func TestQueueReducerPlayContextShufflesAfterOnly(t *testing.T) {
+func TestQueueReducerPlayContextShufflesEntireRestNotJustAfterIndex(t *testing.T) {
+	// Regression test: starting a shuffled play near the end of a playlist
+	// (startIndex close to len(items)) used to dump everything before
+	// startIndex into History as "already played" and only shuffle the
+	// handful of items after it — leaving almost the whole playlist
+	// unreachable going forward. startIndex=3 of 5 items (the "avant-
+	// dernière piste" case) makes that failure obvious: only "e" would
+	// have ended up in Queue.
 	items := []QueueItemDTO{item("a"), item("b"), item("c"), item("d"), item("e")}
 	shuffle := true
 	next := queueReducer(QueueState{}, SyncActionDTO{
-		Type: "PLAY_CONTEXT", Items: items, StartIndex: 1, ContextID: "album:1", ShuffleOverride: &shuffle,
+		Type: "PLAY_CONTEXT", Items: items, StartIndex: 3, ContextID: "album:1", ShuffleOverride: &shuffle,
 	})
-	if next.Current.UID != "b" {
-		t.Fatalf("Current = %v, attendu b (items[startIndex])", next.Current)
+	if next.Current.UID != "d" {
+		t.Fatalf("Current = %v, attendu d (items[startIndex])", next.Current)
 	}
-	if len(next.History) != 1 || next.History[0].UID != "a" {
-		t.Errorf("History = %v, attendu [a]", uids(next.History))
+	if len(next.History) != 0 {
+		t.Errorf("History = %v, attendu vide (rien n'a encore été joué)", uids(next.History))
 	}
-	if len(next.Queue) != 3 {
-		t.Fatalf("len(Queue) = %d, attendu 3 (c,d,e mélangés)", len(next.Queue))
+	if len(next.Queue) != 4 {
+		t.Fatalf("len(Queue) = %d, attendu 4 (a,b,c,e mélangés — tout sauf la piste courante)", len(next.Queue))
+	}
+	seen := map[string]bool{}
+	for _, it := range next.Queue {
+		seen[it.UID] = true
+	}
+	for _, uid := range []string{"a", "b", "c", "e"} {
+		if !seen[uid] {
+			t.Errorf("Queue = %v, il manque %q", uids(next.Queue), uid)
+		}
 	}
 	if len(next.ContextTracks) != 5 {
 		t.Errorf("ContextTracks doit contenir tous les items d'origine, non mélangés")
 	}
 	if *next.ActiveContextID != "album:1" {
 		t.Errorf("ActiveContextID = %q", *next.ActiveContextID)
+	}
+}
+
+func TestQueueReducerPlayContextNonShuffleStillSplitsBeforeAfter(t *testing.T) {
+	// Non-shuffle behavior is unchanged: linear play from startIndex keeps
+	// earlier tracks in History (reachable via Previous) and only queues
+	// what comes after.
+	items := []QueueItemDTO{item("a"), item("b"), item("c"), item("d"), item("e")}
+	next := queueReducer(QueueState{}, SyncActionDTO{
+		Type: "PLAY_CONTEXT", Items: items, StartIndex: 3, ContextID: "album:1",
+	})
+	if !reflect.DeepEqual(uids(next.History), []string{"a", "b", "c"}) {
+		t.Errorf("History = %v, attendu [a b c]", uids(next.History))
+	}
+	if !reflect.DeepEqual(uids(next.Queue), []string{"e"}) {
+		t.Errorf("Queue = %v, attendu [e]", uids(next.Queue))
 	}
 }
 
@@ -121,11 +153,56 @@ func TestQueueReducerSkipNextMovesQueueHeadToCurrent(t *testing.T) {
 	}
 }
 
-func TestQueueReducerSkipNextOnEmptyQueueIsANoOp(t *testing.T) {
+func TestQueueReducerSkipNextOnEmptyQueueIsANoOpWithoutContext(t *testing.T) {
 	state := QueueState{Current: &QueueItemDTO{UID: "now"}}
 	next := queueReducer(state, SyncActionDTO{Type: "SKIP_NEXT"})
 	if next.Current.UID != "now" {
-		t.Errorf("SKIP_NEXT sur une file vide ne doit rien changer, Current = %v", next.Current)
+		t.Errorf("SKIP_NEXT sur une file vide sans contexte ne doit rien changer, Current = %v", next.Current)
+	}
+}
+
+func TestQueueReducerSkipNextOnEmptyQueueLoopsContext(t *testing.T) {
+	state := QueueState{
+		Current:       &QueueItemDTO{UID: "d"},
+		Queue:         []QueueItemDTO{},
+		History:       []QueueItemDTO{item("a"), item("b"), item("c")},
+		ContextTracks: []QueueItemDTO{item("a"), item("b"), item("c"), item("d")},
+	}
+	next := queueReducer(state, SyncActionDTO{Type: "SKIP_NEXT"})
+	if next.Current == nil || next.Current.UID != "a" {
+		t.Fatalf("Current = %v, attendu a (début d'un nouveau tour, non mélangé)", next.Current)
+	}
+	if !reflect.DeepEqual(uids(next.Queue), []string{"b", "c", "d"}) {
+		t.Errorf("Queue = %v, attendu [b c d]", uids(next.Queue))
+	}
+	if !reflect.DeepEqual(uids(next.History), []string{"a", "b", "c", "d"}) {
+		t.Errorf("History = %v, attendu [a b c d]", uids(next.History))
+	}
+}
+
+func TestQueueReducerSkipNextOnEmptyQueueLoopsShuffledContext(t *testing.T) {
+	state := QueueState{
+		Current:       &QueueItemDTO{UID: "d"},
+		Queue:         []QueueItemDTO{},
+		ContextTracks: []QueueItemDTO{item("a"), item("b"), item("c"), item("d")},
+		Shuffle:       true,
+	}
+	next := queueReducer(state, SyncActionDTO{Type: "SKIP_NEXT"})
+	if next.Current == nil {
+		t.Fatal("Current = nil, attendu une piste du contexte")
+	}
+	if len(next.Queue) != 3 {
+		t.Fatalf("len(Queue) = %d, attendu 3", len(next.Queue))
+	}
+	all := append([]string{next.Current.UID}, uids(next.Queue)...)
+	seen := map[string]bool{}
+	for _, uid := range all {
+		seen[uid] = true
+	}
+	for _, uid := range []string{"a", "b", "c", "d"} {
+		if !seen[uid] {
+			t.Errorf("le nouveau tour a perdu %q: current=%v queue=%v", uid, next.Current.UID, uids(next.Queue))
+		}
 	}
 }
 

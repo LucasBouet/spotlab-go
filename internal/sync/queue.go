@@ -98,14 +98,32 @@ func queueReducer(state QueueState, action SyncActionDTO) QueueState {
 			// index, so the command is treated as a no-op.
 			return state
 		}
-		before := append([]QueueItemDTO{}, items[:startIndex]...)
-		after := append([]QueueItemDTO{}, items[startIndex+1:]...)
 		nextShuffle := state.Shuffle
 		if action.ShuffleOverride != nil {
 			nextShuffle = *action.ShuffleOverride
 		}
+		var before, after []QueueItemDTO
 		if nextShuffle {
-			after = shuffleArray(after)
+			// Shuffle has no notion of "before"/"after" a clicked index —
+			// unlike linear play, every other track is equally "next".
+			// Splitting on startIndex here (the pre-fix behavior) dumped
+			// items[:startIndex] into History as if already played, so
+			// starting a shuffle near the end of a long playlist left
+			// almost nothing in Queue and most of the playlist unreachable
+			// except via Previous. Nothing has actually played yet, so
+			// History starts empty and every remaining track — before or
+			// after startIndex alike — goes into the shuffled Queue.
+			rest := make([]QueueItemDTO, 0, len(items)-1)
+			for i, it := range items {
+				if i != startIndex {
+					rest = append(rest, it)
+				}
+			}
+			before = []QueueItemDTO{}
+			after = shuffleArray(rest)
+		} else {
+			before = append([]QueueItemDTO{}, items[:startIndex]...)
+			after = append([]QueueItemDTO{}, items[startIndex+1:]...)
 		}
 		current := items[startIndex]
 		contextID := action.ContextID
@@ -119,11 +137,25 @@ func queueReducer(state QueueState, action SyncActionDTO) QueueState {
 		}
 
 	case "SKIP_NEXT":
-		if len(state.Queue) == 0 {
-			return state
+		queue := state.Queue
+		if len(queue) == 0 {
+			// Reached the end of the current context. Rather than stalling
+			// forever (the old behavior: a no-op, since nothing was left
+			// to promote to Current), start a fresh lap through
+			// ContextTracks — shuffled again if Shuffle is on, matching
+			// how PLAY_CONTEXT itself builds a shuffled first lap. A
+			// context-less play (single track, no ContextTracks) still
+			// has nothing sensible to loop into, so it stays a no-op.
+			if len(state.ContextTracks) == 0 {
+				return state
+			}
+			queue = append([]QueueItemDTO{}, state.ContextTracks...)
+			if state.Shuffle {
+				queue = shuffleArray(queue)
+			}
 		}
-		next := state.Queue[0]
-		rest := append([]QueueItemDTO{}, state.Queue[1:]...)
+		next := queue[0]
+		rest := append([]QueueItemDTO{}, queue[1:]...)
 		history := state.History
 		if state.Current != nil {
 			history = append(append([]QueueItemDTO{}, state.History...), *state.Current)
